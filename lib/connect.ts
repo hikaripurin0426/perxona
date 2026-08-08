@@ -147,9 +147,9 @@ export async function fetchAvatars(): Promise<CatalogPage> {
     );
     return {
       ...page,
-      items: (page.items ?? []).map(({ avatar_id, ...rest }) => ({
-        id: String(avatar_id),
+      items: (page.items ?? []).map(({ avatar_id, id: _id, ...rest }) => ({
         ...rest,
+        id: String(avatar_id ?? _id),
       })),
     };
   });
@@ -168,9 +168,9 @@ export async function fetchScenes(): Promise<CatalogPage> {
     );
     return {
       ...page,
-      items: (page.items ?? []).map(({ scene_id, ...rest }) => ({
-        id: String(scene_id),
+      items: (page.items ?? []).map(({ scene_id, id: _id, ...rest }) => ({
         ...rest,
+        id: String(scene_id ?? _id),
       })),
     };
   });
