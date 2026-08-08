@@ -104,12 +104,18 @@ export function findVoiceIdByNameKey(
   const key = normalizeVoiceName(voiceNameKey);
   if (!key) return "";
 
-  const exact = voices.find(
+  const ranked = [...voices].sort((a, b) => {
+    const aEn = /english|en-us|en us|for english/i.test(a.name || "") ? 1 : 0;
+    const bEn = /english|en-us|en us|for english/i.test(b.name || "") ? 1 : 0;
+    return bEn - aEn;
+  });
+
+  const exact = ranked.find(
     (voice) => normalizeVoiceName(voice.name || "") === key,
   );
   if (exact) return exact.id;
 
-  const partial = voices.find((voice) => {
+  const partial = ranked.find((voice) => {
     const name = normalizeVoiceName(voice.name || "");
     return name.includes(key) || key.includes(name);
   });
@@ -118,11 +124,12 @@ export function findVoiceIdByNameKey(
   // Fall back to distinctive phrase match (e.g. "cute and fast for english").
   const tokens = key.split(" ").filter((token) => token.length > 2);
   if (tokens.length < 2) return "";
-  const scored = voices
+  const scored = ranked
     .map((voice) => {
       const name = normalizeVoiceName(voice.name || "");
       const hits = tokens.filter((token) => name.includes(token)).length;
-      return { voice, hits, name };
+      const englishBonus = /english/.test(name) ? 1 : 0;
+      return { voice, hits: hits + englishBonus, name };
     })
     .filter(({ hits }) => hits >= Math.min(3, tokens.length))
     .sort((a, b) => b.hits - a.hits);

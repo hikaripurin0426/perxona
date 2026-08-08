@@ -16,6 +16,8 @@ export type CatalogPage = {
 
 export type AppConfig = {
   chat: boolean;
+  connectChatbot?: boolean;
+  levelAssess?: boolean;
   presenterUrl: string;
   defaults: {
     avatarId: string;

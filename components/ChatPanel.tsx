@@ -19,6 +19,26 @@ type Props = {
   onSend: (text: string) => Promise<void> | void;
 };
 
+function renderMessageContent(content: string) {
+  const parts = content.split(/(https?:\/\/[^\s]+)/g);
+  return parts.map((part, index) => {
+    if (/^https?:\/\//.test(part)) {
+      return (
+        <a
+          key={`link-${index}`}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="chat-link"
+        >
+          {part}
+        </a>
+      );
+    }
+    return <span key={`text-${index}`}>{part}</span>;
+  });
+}
+
 export function ChatPanel({
   messages,
   disabled,
@@ -86,7 +106,7 @@ export function ChatPanel({
                   <span className="bubble-role">
                     {message.role === "user" ? "You" : "Tutor"}
                   </span>
-                  <p>{message.content}</p>
+                  <p>{renderMessageContent(message.content)}</p>
                 </div>
               ))
             )}

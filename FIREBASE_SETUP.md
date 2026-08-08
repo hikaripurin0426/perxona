@@ -52,9 +52,28 @@ NEXT_PUBLIC_FIREBASE_APP_ID=
 
 Restart `npm run dev` after editing env files.
 
-## 5. Verify
+## 5. Admin SDK (level updates via Connect Function Tool)
+
+Client rules already allow the signed-in user to write their own `users/{uid}`.  
+For **chatbot → Function Tool → Firestore**, the server needs Admin credentials:
+
+1. Firebase Console → **Project settings → Service accounts → Generate new private key**
+2. Put the JSON in env as a single line:
+
+```
+FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","private_key":"-----BEGIN...","client_email":"..."}
+```
+
+Or set `FIREBASE_CLIENT_EMAIL` + `FIREBASE_PRIVATE_KEY` (with `\n` for newlines).
+
+Also set `AVILINGO_TOOL_SECRET` and a **public** `AVILINGO_PUBLIC_BASE_URL` (Connect blocks localhost). See `CONNECT_KIT.md`.
+
+Without Admin + public URL, level still saves via the client after assessment.
+
+## 6. Verify
 
 1. Open the app — lessons still work as a guest
 2. Click **Sign in with Google** — a `users/{uid}` document should appear in Firestore
 3. Send chat messages on different calendar days — `conversationDays` increments once per day
 4. After 3+ user turns in the first lesson (when `level` is still null), level fields should be set
+5. With Admin + public URL configured, `/api/tools/update-level` is called by the Level Assessor chatbot during assessment

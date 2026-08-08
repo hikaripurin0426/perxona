@@ -22,6 +22,7 @@ import {
   findMotionByKeywords,
   withMotionMarkup,
 } from "@/lib/motions";
+import { toEnglishSpeechText } from "@/lib/speechText";
 import {
   recordConversationDay,
   saveLevelAssessment,
@@ -258,7 +259,7 @@ export function LessonApp() {
   async function speak(presenter: PresenterWidget, text: string) {
     setSpeaking(true);
     try {
-      return await presenter.present(text);
+      return await presenter.present(toEnglishSpeechText(text));
     } finally {
       setSpeaking(false);
     }
@@ -287,14 +288,19 @@ export function LessonApp() {
           level: number;
           levelLabel: string;
           reason: string;
+          saved?: boolean;
+          savedVia?: string | null;
         }>("/api/assess-level", {
           method: "POST",
-          body: JSON.stringify({ messages: transcript }),
+          body: JSON.stringify({ messages: transcript, uid: user.uid }),
         });
-        await saveLevelAssessment(user.uid, {
-          level: assessment.level,
-          levelLabel: assessment.levelLabel,
-        });
+        // Prefer Connect Function Tool / Admin server write; client write is fallback.
+        if (!assessment.saved) {
+          await saveLevelAssessment(user.uid, {
+            level: assessment.level,
+            levelLabel: assessment.levelLabel,
+          });
+        }
         setProfile((prev) =>
           prev
             ? {
@@ -314,7 +320,7 @@ export function LessonApp() {
   const sendMessage = useCallback(
     async (text: string) => {
       if (!config?.chat) {
-        setStatus("OPENAI_API_KEY is not configured.");
+        setStatus("Perxona Connect is not configured.");
         return;
       }
       const presenter = getPresenterElement();
@@ -612,8 +618,9 @@ export function LessonApp() {
           />
           {config && !config.chat ? (
             <p className="hint">
-              Set <code>OPENAI_API_KEY</code> in <code>.env.local</code> to
-              enable tutor replies.
+              Set <code>PERXONA_CONNECT_EMAIL</code> and{" "}
+              <code>PERXONA_CONNECT_PASSWORD</code> in <code>.env.local</code>{" "}
+              to enable Connect chatbot tutor replies.
             </p>
           ) : null}
           <ChatPanel

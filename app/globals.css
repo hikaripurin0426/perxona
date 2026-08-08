@@ -784,6 +784,17 @@ button.meeting-tool-leave:disabled {
   margin: 0.2rem 0 0;
   line-height: 1.45;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-link {
+  color: color-mix(in srgb, var(--accent) 85%, #fff);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-link:hover {
+  color: var(--accent);
 }
 
 .bubble-role {

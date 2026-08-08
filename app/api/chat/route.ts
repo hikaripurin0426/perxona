@@ -1,12 +1,15 @@
 import {
   createPresentation,
   fetchAvatarMotions,
-  type ConnectEmotion,
-  type ConnectIntensity,
+  isConnectConfigured,
 } from "@/lib/connect";
-import { createChatReply } from "@/lib/openai";
+import {
+  findMotionByKeywords,
+  withMotionMarkup,
+} from "@/lib/motions";
 import { isValidRomajiNickname, normalizeNickname } from "@/lib/nickname";
-import { withMotionMarkup } from "@/lib/motions";
+import { toEnglishSpeechText } from "@/lib/speechText";
+import { askAvilingoTutor, pickTutorEmotion } from "@/lib/tutorBot";
 import type { ChatMessage } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -14,6 +17,16 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
+    if (!isConnectConfigured()) {
+      return Response.json(
+        {
+          error:
+            "Perxona Connect is not configured. Set PERXONA_CONNECT_EMAIL and PERXONA_CONNECT_PASSWORD.",
+        },
+        { status: 501 },
+      );
+    }
+
     const body = await request.json();
     const messages = body?.messages;
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -63,57 +76,62 @@ export async function POST(request: Request) {
     const voiceId =
       typeof body?.voiceId === "string" ? body.voiceId.trim() : "";
 
-    const motions = avatarId ? await fetchAvatarMotions(avatarId) : [];
-    const expressive = await createChatReply(normalized, {
-      learnerName: isValidRomajiNickname(learnerName) ? learnerName : null,
+    const reply = await askAvilingoTutor(normalized, {
       tutorName,
+      learnerName: isValidRomajiNickname(learnerName) ? learnerName : null,
       levelLabel,
-      motions,
     });
 
-    let script = withMotionMarkup(expressive.reply, expressive.motionId);
-    let reply = expressive.reply;
-    let emotion: ConnectEmotion = expressive.emotion;
-    let intensity: ConnectIntensity = expressive.intensity;
+    const { emotion, intensity } = pickTutorEmotion(reply);
+    const displayReply = reply;
+    const speechText = toEnglishSpeechText(reply);
+    let script = speechText;
     let usedConnectPresentation = false;
 
-    if (avatarId) {
+    const motions = avatarId ? await fetchAvatarMotions(avatarId) : [];
+    const cue =
+      findMotionByKeywords(motions, [
+        "talk",
+        "speak",
+        "explain",
+        "nod",
+        "gesture",
+        "wave",
+      ]) || motions[0] || null;
+
+    if (avatarId && speechText) {
       try {
         const presentation = await createPresentation({
           avatarId,
           voiceId: voiceId || undefined,
-          message: expressive.reply,
+          message: speechText,
           emotion,
           intensity,
         });
         if (
-          typeof presentation.display_text === "string" &&
-          presentation.display_text.trim()
-        ) {
-          reply = presentation.display_text.trim();
-        }
-        if (
           typeof presentation.presentation === "string" &&
           presentation.presentation.trim()
         ) {
-          script = presentation.presentation.trim();
+          // Keep English-only for TTS even if upstream echoes other text.
+          script = toEnglishSpeechText(presentation.presentation.trim());
           usedConnectPresentation = true;
         }
       } catch {
-        // Motion Markup fallback still works if presentation API fails.
+        // Fall back to Motion Markup below.
       }
     }
 
     if (!usedConnectPresentation) {
-      script = withMotionMarkup(reply, expressive.motionId);
+      script = withMotionMarkup(speechText, cue?.id || null);
     }
 
     return Response.json({
-      reply,
+      reply: displayReply,
       script,
       emotion,
       intensity,
-      motionId: expressive.motionId,
+      motionId: cue?.id || null,
+      provider: "connect-chatbot",
     });
   } catch (err) {
     const e = err as Error & { status?: number; payload?: unknown };

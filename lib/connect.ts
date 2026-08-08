@@ -13,6 +13,14 @@ function requireEnv(name: string): string {
   return value;
 }
 
+export function isConnectConfigured(): boolean {
+  return Boolean(
+    process.env.PERXONA_API_BASE_URL &&
+      process.env.PERXONA_CONNECT_EMAIL &&
+      process.env.PERXONA_CONNECT_PASSWORD,
+  );
+}
+
 export function getPresenterUrl(): string {
   return (
     process.env.PRESENTER_URL ||
@@ -38,13 +46,29 @@ async function callUpstream(
   token?: string,
 ): Promise<Response> {
   const headers = new Headers(opts.headers);
-  if (!headers.has("Content-Type") && opts.body) {
+  if (!headers.has("Content-Type") && opts.body && !(opts.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
   return fetch(`${baseUrl()}${path}`, { ...opts, headers });
+}
+
+async function callUpstreamFormData(
+  path: string,
+  method: "POST" | "PATCH",
+  form: FormData,
+  token: string,
+): Promise<Response> {
+  return callUpstream(
+    path,
+    {
+      method,
+      body: form,
+    },
+    token,
+  );
 }
 
 async function upstreamJson<T>(response: Response, label: string): Promise<T> {
@@ -231,6 +255,147 @@ export async function createPresentation(input: {
     );
     return upstreamJson<PresentationPayload>(response, "presentation");
   });
+}
+
+export type ConnectChatPart = { type: "text"; text: string };
+export type ConnectChatMessage = {
+  role: "user" | "assistant";
+  parts: ConnectChatPart[];
+};
+
+export type ChatbotSummary = {
+  id: string;
+  name?: string;
+  status?: string;
+  [key: string]: unknown;
+};
+
+export type ChatbotDetail = ChatbotSummary & {
+  custom_instructions?: string | null;
+  knowledge?: { status?: string; filename?: string | null } | null;
+  tools?: unknown[];
+};
+
+export async function listChatbots(): Promise<ChatbotSummary[]> {
+  return authedCall(async (token) => {
+    const page = await upstreamJson<{ items?: ChatbotSummary[] }>(
+      await callUpstream("/api/v1/connect/chatbots?size=50", {}, token),
+      "chatbots",
+    );
+    return page.items ?? [];
+  });
+}
+
+export async function getChatbot(id: string): Promise<ChatbotDetail> {
+  return authedCall(async (token) =>
+    upstreamJson<ChatbotDetail>(
+      await callUpstream(
+        `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
+        {},
+        token,
+      ),
+      "chatbot detail",
+    ),
+  );
+}
+
+export async function createChatbot(input: {
+  name: string;
+  custom_instructions?: string;
+  tools?: unknown[];
+}): Promise<ChatbotDetail> {
+  return authedCall(async (token) => {
+    const form = new FormData();
+    form.append("name", input.name);
+    if (input.custom_instructions != null) {
+      form.append("custom_instructions", input.custom_instructions);
+    }
+    if (input.tools !== undefined) {
+      form.append("tools", JSON.stringify(input.tools));
+    }
+    return upstreamJson<ChatbotDetail>(
+      await callUpstreamFormData(
+        "/api/v1/connect/chatbots",
+        "POST",
+        form,
+        token,
+      ),
+      "create chatbot",
+    );
+  });
+}
+
+export async function updateChatbot(
+  id: string,
+  input: {
+    name?: string;
+    custom_instructions?: string;
+    tools?: unknown[];
+    remove_knowledge?: boolean;
+  },
+): Promise<ChatbotDetail> {
+  return authedCall(async (token) => {
+    const form = new FormData();
+    if (input.name != null) form.append("name", input.name);
+    if (input.custom_instructions !== undefined) {
+      form.append("custom_instructions", input.custom_instructions ?? "");
+    }
+    if (input.tools !== undefined) {
+      form.append("tools", JSON.stringify(input.tools));
+    }
+    if (input.remove_knowledge) form.append("remove_knowledge", "true");
+    return upstreamJson<ChatbotDetail>(
+      await callUpstreamFormData(
+        `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
+        "PATCH",
+        form,
+        token,
+      ),
+      "update chatbot",
+    );
+  });
+}
+
+export async function uploadChatbotKnowledge(
+  id: string,
+  file: { buffer: Buffer; filename: string; mimeType: string },
+): Promise<ChatbotDetail> {
+  return authedCall(async (token) => {
+    const form = new FormData();
+    form.append(
+      "knowledge_file",
+      new Blob([new Uint8Array(file.buffer)], { type: file.mimeType }),
+      file.filename,
+    );
+    return upstreamJson<ChatbotDetail>(
+      await callUpstreamFormData(
+        `/api/v1/connect/chatbots/${encodeURIComponent(id)}`,
+        "PATCH",
+        form,
+        token,
+      ),
+      "upload chatbot knowledge",
+    );
+  });
+}
+
+export async function chatWithChatbot(
+  id: string,
+  messages: ConnectChatMessage[],
+): Promise<{ id?: string; status?: string; reply_text?: string }> {
+  return authedCall(async (token) =>
+    upstreamJson(
+      await callUpstream(
+        `/api/v1/connect/chatbots/${encodeURIComponent(id)}/chat`,
+        {
+          method: "POST",
+          body: JSON.stringify({ messages }),
+        },
+        token,
+      ),
+      "chat with chatbot",
+    ),
+  );
 }
 
 export async function fetchScenes(): Promise<CatalogPage> {
