@@ -75,5 +75,4 @@ Without Admin + public URL, level still saves via the client after assessment.
 1. Open the app — lessons still work as a guest
 2. Click **Sign in with Google** — a `users/{uid}` document should appear in Firestore
 3. Send chat messages on different calendar days — `conversationDays` increments once per day
-4. After 3+ user turns in the first lesson (when `level` is still null), level fields should be set
-5. With Admin + public URL configured, `/api/tools/update-level` is called by the Level Assessor chatbot during assessment
+4. After every 5 user chat turns while signed in, `level` increases by 1 (A1→A2→…→C1, max 5). `userMessageCount` tracks turns.

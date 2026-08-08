@@ -23,13 +23,8 @@ import {
   withMotionMarkup,
 } from "@/lib/motions";
 import { toEnglishSpeechText } from "@/lib/speechText";
-import {
-  recordConversationDay,
-  saveLevelAssessment,
-} from "@/lib/userProfile";
+import { recordLessonUserTurn } from "@/lib/userProfile";
 import type { AppConfig, CatalogItem, PresenterWidget } from "@/lib/types";
-
-const LEVEL_ASSESS_MIN_USER_TURNS = 3;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -75,7 +70,6 @@ function loadPresenterEngine(presenterUrl: string): Promise<void> {
 export function LessonApp() {
   const { user, profile, setProfile, needsNickname, loading: authLoading } =
     useAuth();
-  const levelAssessStarted = useRef(false);
   const autoStartedRef = useRef(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [avatars, setAvatars] = useState<CatalogItem[]>([]);
@@ -100,10 +94,6 @@ export function LessonApp() {
   useEffect(() => {
     motionsRef.current = motions;
   }, [motions]);
-
-  useEffect(() => {
-    levelAssessStarted.current = false;
-  }, [user?.uid]);
 
   useEffect(() => {
     if (!avatarId) {
@@ -276,47 +266,6 @@ export function LessonApp() {
     }
   }
 
-  const maybeAssessLevel = useCallback(
-    async (transcript: ChatTurn[]) => {
-      if (!user || !profile || profile.level != null) return;
-      const userTurns = transcript.filter((m) => m.role === "user").length;
-      if (userTurns < LEVEL_ASSESS_MIN_USER_TURNS) return;
-      if (levelAssessStarted.current) return;
-      levelAssessStarted.current = true;
-      try {
-        const assessment = await api<{
-          level: number;
-          levelLabel: string;
-          reason: string;
-          saved?: boolean;
-          savedVia?: string | null;
-        }>("/api/assess-level", {
-          method: "POST",
-          body: JSON.stringify({ messages: transcript, uid: user.uid }),
-        });
-        // Prefer Connect Function Tool / Admin server write; client write is fallback.
-        if (!assessment.saved) {
-          await saveLevelAssessment(user.uid, {
-            level: assessment.level,
-            levelLabel: assessment.levelLabel,
-          });
-        }
-        setProfile((prev) =>
-          prev
-            ? {
-                ...prev,
-                level: assessment.level,
-                levelLabel: assessment.levelLabel,
-              }
-            : prev,
-        );
-      } catch {
-        levelAssessStarted.current = false;
-      }
-    },
-    [user, profile, setProfile],
-  );
-
   const sendMessage = useCallback(
     async (text: string) => {
       if (!config?.chat) {
@@ -356,12 +305,12 @@ export function LessonApp() {
 
         if (user) {
           try {
-            const updated = await recordConversationDay(user.uid);
+            // +1 level in Firestore every 5 learner messages (cap C1 / 5).
+            const updated = await recordLessonUserTurn(user.uid);
             if (updated) setProfile(updated);
           } catch {
             // Progress is best-effort; lesson continues.
           }
-          void maybeAssessLevel(withReply);
         }
 
         if (presenter) {
@@ -391,7 +340,6 @@ export function LessonApp() {
       avatarId,
       voiceId,
       setProfile,
-      maybeAssessLevel,
     ],
   );
 
