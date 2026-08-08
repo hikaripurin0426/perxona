@@ -6,9 +6,12 @@ import {
   pickCuratedAvatarId,
 } from "@/components/CatalogSelect";
 import { ChatPanel, type ChatTurn } from "@/components/ChatPanel";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getPresenterElement, LessonStage } from "@/components/LessonStage";
+import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import {
   findFixedSceneId,
+  findLessonAvatarOptionByCatalogId,
   resolveVoiceIdForAvatar,
 } from "@/lib/avatars";
 import type { AppConfig, CatalogItem, PresenterWidget } from "@/lib/types";
@@ -64,6 +67,9 @@ export function LessonApp() {
   const [ready, setReady] = useState(false);
   const [starting, setStarting] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [chatOpen, setChatOpen] = useState(true);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const [status, setStatus] = useState("Loading catalog…");
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -196,6 +202,15 @@ export function LessonApp() {
     });
   }
 
+  async function speak(presenter: PresenterWidget, text: string) {
+    setSpeaking(true);
+    try {
+      return await presenter.present(text);
+    } finally {
+      setSpeaking(false);
+    }
+  }
+
   async function startLesson() {
     if (!avatarId || !sceneId || !voiceId) {
       setStatus("Select avatar, scene, and voice first.");
@@ -226,7 +241,7 @@ export function LessonApp() {
         const greeting =
           "Hi! I'm your English tutor. How are you today?";
         setMessages([{ role: "assistant", content: greeting }]);
-        const spoken = await presenter.present(greeting);
+        const spoken = await speak(presenter, greeting);
         if (!spoken?.success) {
           setStatus(spoken?.message || "Avatar ready, but greeting failed.");
         }
@@ -239,40 +254,71 @@ export function LessonApp() {
     }
   }
 
-  async function sendMessage(text: string) {
-    if (!config?.chat) {
-      setStatus("OPENAI_API_KEY is not configured.");
-      return;
-    }
-    const presenter = getPresenterElement();
-    const nextMessages: ChatTurn[] = [
-      ...messages,
-      { role: "user", content: text },
-    ];
-    setMessages(nextMessages);
-    setBusy(true);
-    setStatus("Waiting for tutor…");
-    try {
-      const { reply } = await api<{ reply: string }>("/api/chat", {
-        method: "POST",
-        body: JSON.stringify({ messages: nextMessages }),
-      });
-      setMessages([...nextMessages, { role: "assistant", content: reply }]);
-      if (presenter) {
-        const result = await presenter.present(reply);
-        if (!result?.success) {
-          setStatus(result?.message || "Avatar could not speak.");
+  const sendMessage = useCallback(
+    async (text: string) => {
+      if (!config?.chat) {
+        setStatus("OPENAI_API_KEY is not configured.");
+        return;
+      }
+      const presenter = getPresenterElement();
+      const nextMessages: ChatTurn[] = [
+        ...messages,
+        { role: "user", content: text },
+      ];
+      setMessages(nextMessages);
+      setBusy(true);
+      setStatus("Waiting for tutor…");
+      try {
+        const { reply } = await api<{ reply: string }>("/api/chat", {
+          method: "POST",
+          body: JSON.stringify({ messages: nextMessages }),
+        });
+        setMessages([...nextMessages, { role: "assistant", content: reply }]);
+        if (presenter) {
+          const result = await speak(presenter, reply);
+          if (!result?.success) {
+            setStatus(result?.message || "Avatar could not speak.");
+          } else {
+            setStatus("Ready");
+          }
         } else {
           setStatus("Ready");
         }
-      } else {
-        setStatus("Ready");
+      } catch (err) {
+        setStatus(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
       }
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    },
+    [config?.chat, messages],
+  );
+
+  const speech = useSpeechRecognition({
+    enabled: ready && !busy && !starting,
+    onStart: () => {
+      const presenter = getPresenterElement();
+      void presenter?.interruptPresentation?.();
+    },
+    onSubmit: sendMessage,
+  });
+
+  function requestLeaveLesson() {
+    if (!ready && !starting && !speaking && !busy) return;
+    setLeaveConfirmOpen(true);
+  }
+
+  function confirmLeaveLesson() {
+    setLeaveConfirmOpen(false);
+    speech.stop(false);
+    const presenter = getPresenterElement();
+    void presenter?.interruptPresentation?.();
+    setReady(false);
+    setStarting(false);
+    setBusy(false);
+    setSpeaking(false);
+    setMessages([]);
+    setChatOpen(true);
+    setStatus("Lesson ended. Press Start lesson to join again.");
   }
 
   if (bootError) {
@@ -310,15 +356,31 @@ export function LessonApp() {
       </header>
 
       <div className="layout">
-        <LessonStage ready={ready} status={status} />
+        <LessonStage
+          ready={ready}
+          status={status}
+          speaking={speaking}
+          participantName={
+            findLessonAvatarOptionByCatalogId(avatars, avatarId)?.label ||
+            "Tutor"
+          }
+          micSupported={speech.supported}
+          listening={speech.listening}
+          micDisabled={!ready || busy || starting}
+          onMicToggle={speech.toggle}
+          chatOpen={chatOpen}
+          onChatToggle={() => setChatOpen((open) => !open)}
+          leaveDisabled={!ready && !starting && !speaking && !busy}
+          onLeave={requestLeaveLesson}
+        />
         <aside className="sidebar">
           <CatalogSelect
             avatars={avatars}
             avatarId={avatarId}
-            disabled={starting}
+            disabled={starting || speech.listening}
             onAvatarChange={(id) => selectAvatar(id, avatars, voices)}
           />
-          {!config?.chat ? (
+          {config && !config.chat ? (
             <p className="hint">
               Set <code>OPENAI_API_KEY</code> in <code>.env.local</code> to
               enable tutor replies.
@@ -329,10 +391,24 @@ export function LessonApp() {
             disabled={!ready}
             busy={busy}
             status={status}
+            listening={speech.listening}
+            speechDraft={speech.transcript}
+            micError={speech.error}
+            open={chatOpen}
             onSend={sendMessage}
           />
         </aside>
       </div>
+
+      <ConfirmDialog
+        open={leaveConfirmOpen}
+        title="Leave lesson?"
+        message="This will end the conversation with the avatar. You can start again anytime."
+        confirmLabel="Leave"
+        cancelLabel="Stay"
+        onConfirm={confirmLeaveLesson}
+        onCancel={() => setLeaveConfirmOpen(false)}
+      />
     </main>
   );
 }

@@ -48,7 +48,7 @@ export const LESSON_AVATARS: LessonAvatarOption[] = [
     nameKey: "cc050_female_tsubasa",
     label: "Tsubasa",
     iconSrc: "/avatar_images/cc050.png",
-    voiceNameKey: "Female - cute and fast(For English)",
+    voiceNameKey: "Female - cute and fast (For English)",
     gender: "female",
   },
   {
@@ -88,22 +88,46 @@ export function matchLessonAvatar(
   return name.includes(key) || name.includes(code);
 }
 
+function normalizeVoiceName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function findVoiceIdByNameKey(
   voices: { id: string; name?: string }[],
   voiceNameKey: string,
 ): string {
-  const key = voiceNameKey.toLowerCase().replace(/\s+/g, " ").trim();
-  const exact = voices.find((voice) => {
-    const name = (voice.name || "").toLowerCase().replace(/\s+/g, " ").trim();
-    return name === key;
-  });
+  const key = normalizeVoiceName(voiceNameKey);
+  if (!key) return "";
+
+  const exact = voices.find(
+    (voice) => normalizeVoiceName(voice.name || "") === key,
+  );
   if (exact) return exact.id;
 
   const partial = voices.find((voice) => {
-    const name = (voice.name || "").toLowerCase().replace(/\s+/g, " ").trim();
+    const name = normalizeVoiceName(voice.name || "");
     return name.includes(key) || key.includes(name);
   });
-  return partial?.id || "";
+  if (partial) return partial.id;
+
+  // Fall back to distinctive phrase match (e.g. "cute and fast for english").
+  const tokens = key.split(" ").filter((token) => token.length > 2);
+  if (tokens.length < 2) return "";
+  const scored = voices
+    .map((voice) => {
+      const name = normalizeVoiceName(voice.name || "");
+      const hits = tokens.filter((token) => name.includes(token)).length;
+      return { voice, hits, name };
+    })
+    .filter(({ hits }) => hits >= Math.min(3, tokens.length))
+    .sort((a, b) => b.hits - a.hits);
+
+  return scored[0]?.voice.id || "";
 }
 
 export function findLessonAvatarOptionByCatalogId(
