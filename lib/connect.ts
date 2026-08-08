@@ -155,6 +155,84 @@ export async function fetchAvatars(): Promise<CatalogPage> {
   });
 }
 
+export type MotionItem = {
+  id: string;
+  name: string;
+};
+
+export async function fetchAvatarMotions(avatarId: string): Promise<MotionItem[]> {
+  return authedCall(async (token) => {
+    const response = await callUpstream(
+      `/api/v1/connect/assets/avatars/${encodeURIComponent(avatarId)}/motions`,
+      {},
+      token,
+    );
+    const page = await upstreamJson<{
+      items?: Array<Record<string, unknown>>;
+    }>(response, "avatar motions");
+    return (page.items ?? [])
+      .map((motion) => ({
+        id: String(motion.id ?? motion.motion_id ?? ""),
+        name: String(motion.name ?? ""),
+      }))
+      .filter((motion) => motion.id && motion.name);
+  });
+}
+
+export const CONNECT_EMOTIONS = [
+  "joy",
+  "excitement",
+  "admiration",
+  "caring",
+  "gratitude",
+  "sadness",
+  "disappointment",
+  "annoyance",
+  "embarrassment",
+  "curiosity",
+  "surprise",
+  "realization",
+  "confusion",
+] as const;
+
+export type ConnectEmotion = (typeof CONNECT_EMOTIONS)[number];
+export type ConnectIntensity = "low" | "neutral" | "high";
+
+export type PresentationPayload = {
+  display_text?: string;
+  presentation?: string;
+  speech_content?: string | null;
+  [key: string]: unknown;
+};
+
+export async function createPresentation(input: {
+  avatarId: string;
+  voiceId?: string;
+  message: string;
+  emotion?: ConnectEmotion | null;
+  intensity?: ConnectIntensity | null;
+}): Promise<PresentationPayload> {
+  return authedCall(async (token) => {
+    const body: Record<string, unknown> = {
+      avatar_id: input.avatarId,
+      message: input.message,
+    };
+    if (input.voiceId) body.voice_id = input.voiceId;
+    if (input.emotion) body.emotion = input.emotion;
+    if (input.intensity) body.intensity = input.intensity;
+
+    const response = await callUpstream(
+      "/api/v1/connect/presentation",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      token,
+    );
+    return upstreamJson<PresentationPayload>(response, "presentation");
+  });
+}
+
 export async function fetchScenes(): Promise<CatalogPage> {
   return authedCall(async (token) => {
     const response = await callUpstream(

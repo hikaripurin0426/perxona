@@ -1,3 +1,9 @@
+import type {
+  ConnectEmotion,
+  ConnectIntensity,
+  MotionItem,
+} from "./connect";
+import { CONNECT_EMOTIONS } from "./connect";
 import type { ChatMessage } from "./types";
 
 export const ENGLISH_TUTOR_SYSTEM_PROMPT = `You are a friendly English conversation tutor speaking through an AI avatar in a live lesson.
@@ -9,13 +15,14 @@ You lead the lesson. You are the teacher, not a help desk or chatbot.
 - Keep most of your reply in natural, spoken English (1–3 short sentences).
 - Gently correct mistakes: briefly show a better phrase, then continue.
 - If they write in Japanese, reply mainly in English with a short Japanese hint only when helpful.
-- Do not use markdown, bullet lists, or stage directions. Plain speech only — your text will be read aloud by TTS.
+- Do not use markdown, bullet lists, stage directions, or Motion Markup in the reply field. Plain speech only — your text will be read aloud by TTS.
 - Stay encouraging and keep the learner practicing.`;
 
 function buildTutorSystemPrompt(options?: {
   learnerName?: string | null;
   tutorName?: string | null;
   levelLabel?: string | null;
+  motions?: MotionItem[];
 }): string {
   const parts = [ENGLISH_TUTOR_SYSTEM_PROMPT];
   const tutor = options?.tutorName?.trim();
@@ -40,6 +47,21 @@ function buildTutorSystemPrompt(options?: {
       `The learner's level is not assessed yet. Start with simple A2-style English and everyday topics. If they struggle, simplify; if they handle it easily, raise the challenge a little.`,
     );
   }
+
+  const motionList = options?.motions?.slice(0, 40) || [];
+  parts.push(
+    `Return ONLY a JSON object with:
+- "reply": the spoken English line (1–3 short sentences)
+- "emotion": one of ${CONNECT_EMOTIONS.join(", ")} matching your tone
+- "intensity": one of low, neutral, high
+- "motionId": an id from the motion catalog below when a gesture helps, otherwise null
+Never invent motion IDs. Prefer at most one motion per turn.`,
+  );
+  if (motionList.length > 0) {
+    parts.push(`Motion catalog: ${JSON.stringify(motionList)}`);
+  } else {
+    parts.push(`Motion catalog is empty — always set "motionId" to null.`);
+  }
   return parts.join("\n\n");
 }
 
@@ -54,19 +76,72 @@ function requireApiKey(): string {
   return key;
 }
 
+export type ExpressiveTutorReply = {
+  reply: string;
+  emotion: ConnectEmotion;
+  intensity: ConnectIntensity;
+  motionId: string | null;
+};
+
+function parseExpressiveReply(
+  raw: string,
+  motions: MotionItem[],
+): ExpressiveTutorReply {
+  const jsonMatch = raw.trim().match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return {
+      reply: raw.trim(),
+      emotion: "caring",
+      intensity: "neutral",
+      motionId: null,
+    };
+  }
+  const parsed = JSON.parse(jsonMatch[0]) as {
+    reply?: unknown;
+    emotion?: unknown;
+    intensity?: unknown;
+    motionId?: unknown;
+  };
+  const reply =
+    typeof parsed.reply === "string" && parsed.reply.trim()
+      ? parsed.reply.trim()
+      : raw.trim();
+  const emotionRaw =
+    typeof parsed.emotion === "string" ? parsed.emotion.toLowerCase() : "";
+  const emotion = (CONNECT_EMOTIONS as readonly string[]).includes(emotionRaw)
+    ? (emotionRaw as ConnectEmotion)
+    : "caring";
+  const intensityRaw =
+    typeof parsed.intensity === "string" ? parsed.intensity.toLowerCase() : "";
+  const intensity: ConnectIntensity =
+    intensityRaw === "low" ||
+    intensityRaw === "high" ||
+    intensityRaw === "neutral"
+      ? intensityRaw
+      : "neutral";
+  const known = new Set(motions.map((m) => m.id));
+  const motionId =
+    typeof parsed.motionId === "string" && known.has(parsed.motionId)
+      ? parsed.motionId
+      : null;
+  return { reply, emotion, intensity, motionId };
+}
+
 export async function createChatReply(
   messages: ChatMessage[],
   options?: {
     learnerName?: string | null;
     tutorName?: string | null;
     levelLabel?: string | null;
+    motions?: MotionItem[];
   },
-): Promise<string> {
+): Promise<ExpressiveTutorReply> {
   const apiKey = requireApiKey();
   const model = process.env.OPENAI_MODEL || "gpt-4o";
   const baseUrl = (
     process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"
   ).replace(/\/$/, "");
+  const motions = options?.motions || [];
 
   const payloadMessages: ChatMessage[] = [
     {
@@ -75,6 +150,7 @@ export async function createChatReply(
         learnerName: options?.learnerName,
         tutorName: options?.tutorName,
         levelLabel: options?.levelLabel,
+        motions,
       }),
     },
     ...messages.filter((m) => m.role !== "system"),
@@ -90,6 +166,7 @@ export async function createChatReply(
       model,
       messages: payloadMessages,
       temperature: 0.7,
+      response_format: { type: "json_object" },
     }),
   });
 
@@ -101,14 +178,14 @@ export async function createChatReply(
     });
   }
 
-  const reply = payload?.choices?.[0]?.message?.content;
-  if (typeof reply !== "string" || !reply.trim()) {
+  const content = payload?.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
     throw Object.assign(new Error("OpenAI returned an empty reply"), {
       status: 502,
       payload,
     });
   }
-  return reply.trim();
+  return parseExpressiveReply(content, motions);
 }
 
 export type LevelAssessment = {

@@ -1,5 +1,12 @@
+import {
+  createPresentation,
+  fetchAvatarMotions,
+  type ConnectEmotion,
+  type ConnectIntensity,
+} from "@/lib/connect";
 import { createChatReply } from "@/lib/openai";
 import { isValidRomajiNickname, normalizeNickname } from "@/lib/nickname";
+import { withMotionMarkup } from "@/lib/motions";
 import type { ChatMessage } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -51,12 +58,63 @@ export async function POST(request: Request) {
     const levelLabel = /^[A-C][12]$/i.test(rawLevel)
       ? rawLevel.toUpperCase()
       : null;
-    const reply = await createChatReply(normalized, {
+    const avatarId =
+      typeof body?.avatarId === "string" ? body.avatarId.trim() : "";
+    const voiceId =
+      typeof body?.voiceId === "string" ? body.voiceId.trim() : "";
+
+    const motions = avatarId ? await fetchAvatarMotions(avatarId) : [];
+    const expressive = await createChatReply(normalized, {
       learnerName: isValidRomajiNickname(learnerName) ? learnerName : null,
       tutorName,
       levelLabel,
+      motions,
     });
-    return Response.json({ reply });
+
+    let script = withMotionMarkup(expressive.reply, expressive.motionId);
+    let reply = expressive.reply;
+    let emotion: ConnectEmotion = expressive.emotion;
+    let intensity: ConnectIntensity = expressive.intensity;
+    let usedConnectPresentation = false;
+
+    if (avatarId) {
+      try {
+        const presentation = await createPresentation({
+          avatarId,
+          voiceId: voiceId || undefined,
+          message: expressive.reply,
+          emotion,
+          intensity,
+        });
+        if (
+          typeof presentation.display_text === "string" &&
+          presentation.display_text.trim()
+        ) {
+          reply = presentation.display_text.trim();
+        }
+        if (
+          typeof presentation.presentation === "string" &&
+          presentation.presentation.trim()
+        ) {
+          script = presentation.presentation.trim();
+          usedConnectPresentation = true;
+        }
+      } catch {
+        // Motion Markup fallback still works if presentation API fails.
+      }
+    }
+
+    if (!usedConnectPresentation) {
+      script = withMotionMarkup(reply, expressive.motionId);
+    }
+
+    return Response.json({
+      reply,
+      script,
+      emotion,
+      intensity,
+      motionId: expressive.motionId,
+    });
   } catch (err) {
     const e = err as Error & { status?: number; payload?: unknown };
     const status = e.status ?? 502;

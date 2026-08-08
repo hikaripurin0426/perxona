@@ -39,6 +39,7 @@ export type PresentationResult = {
 export type PresenterWidget = HTMLElement & {
   initialize: (connectToken: string, target: PresentationTarget) => Promise<void>;
   present: (content: string) => Promise<PresentationResult>;
+  playMotion?: (motionId: string) => Promise<PresentationResult>;
   resumeAudioPlayback: () => Promise<void>;
   interruptPresentation: () => Promise<void> | void;
   refreshConnectToken: (connectToken: string) => Promise<void> | void;

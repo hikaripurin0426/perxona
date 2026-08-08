@@ -17,6 +17,11 @@ import {
   findLessonAvatarOptionByCatalogId,
   resolveVoiceIdForAvatar,
 } from "@/lib/avatars";
+import type { MotionItem } from "@/lib/connect";
+import {
+  findMotionByKeywords,
+  withMotionMarkup,
+} from "@/lib/motions";
 import {
   recordConversationDay,
   saveLevelAssessment,
@@ -88,10 +93,38 @@ export function LessonApp() {
   const [bootError, setBootError] = useState<string | null>(null);
   const [stageParticipantName, setStageParticipantName] = useState("Tutor");
   const [catalogReady, setCatalogReady] = useState(false);
+  const [motions, setMotions] = useState<MotionItem[]>([]);
+  const motionsRef = useRef<MotionItem[]>([]);
+
+  useEffect(() => {
+    motionsRef.current = motions;
+  }, [motions]);
 
   useEffect(() => {
     levelAssessStarted.current = false;
   }, [user?.uid]);
+
+  useEffect(() => {
+    if (!avatarId) {
+      setMotions([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const page = await api<{ items: MotionItem[] }>(
+          `/api/avatars/${encodeURIComponent(avatarId)}/motions`,
+        );
+        if (cancelled) return;
+        setMotions(page.items || []);
+      } catch {
+        if (!cancelled) setMotions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [avatarId]);
 
   function selectAvatar(
     nextAvatarId: string,
@@ -231,6 +264,17 @@ export function LessonApp() {
     }
   }
 
+  async function playCueMotion(keywords: string[]) {
+    const presenter = getPresenterElement();
+    const motion = findMotionByKeywords(motionsRef.current, keywords);
+    if (!presenter?.playMotion || !motion) return;
+    try {
+      await presenter.playMotion(motion.id);
+    } catch {
+      // Best-effort cue; speech can continue without it.
+    }
+  }
+
   const maybeAssessLevel = useCallback(
     async (transcript: ChatTurn[]) => {
       if (!user || !profile || profile.level != null) return;
@@ -282,13 +326,20 @@ export function LessonApp() {
       setBusy(true);
       setStatus("Waiting for tutor…");
       try {
-        const { reply } = await api<{ reply: string }>("/api/chat", {
+        const { reply, script } = await api<{
+          reply: string;
+          script?: string;
+          emotion?: string;
+          intensity?: string;
+        }>("/api/chat", {
           method: "POST",
           body: JSON.stringify({
             messages: nextMessages,
             learnerName: profile?.username || undefined,
             tutorName: stageParticipantName || undefined,
             levelLabel: profile?.levelLabel || undefined,
+            avatarId: avatarId || undefined,
+            voiceId: voiceId || undefined,
           }),
         });
         const withReply: ChatTurn[] = [
@@ -308,7 +359,8 @@ export function LessonApp() {
         }
 
         if (presenter) {
-          const result = await speak(presenter, reply);
+          const spokenText = script?.trim() || reply;
+          const result = await speak(presenter, spokenText);
           if (!result?.success) {
             setStatus(result?.message || "Avatar could not speak.");
           } else {
@@ -330,6 +382,8 @@ export function LessonApp() {
       profile?.username,
       profile?.levelLabel,
       stageParticipantName,
+      avatarId,
+      voiceId,
       setProfile,
       maybeAssessLevel,
     ],
@@ -340,6 +394,7 @@ export function LessonApp() {
     onStart: () => {
       const presenter = getPresenterElement();
       void presenter?.interruptPresentation?.();
+      void playCueMotion(["listen", "listening", "idle", "nod", "think"]);
     },
     onSubmit: sendMessage,
   });
@@ -390,7 +445,30 @@ export function LessonApp() {
         ? `Hi, ${nick}! I'm ${tutorName}. Today let's practice English together. ${topicAsk}`
         : `Hi! I'm ${tutorName}. Today let's practice English together. ${topicAsk}`;
       setMessages([{ role: "assistant", content: greeting }]);
-      const spoken = await speak(presenter, greeting);
+      let cueMotions = motionsRef.current;
+      if (avatarId && cueMotions.length === 0) {
+        try {
+          const page = await api<{ items: MotionItem[] }>(
+            `/api/avatars/${encodeURIComponent(avatarId)}/motions`,
+          );
+          cueMotions = page.items || [];
+          setMotions(cueMotions);
+          motionsRef.current = cueMotions;
+        } catch {
+          cueMotions = [];
+        }
+      }
+      const greetMotion = findMotionByKeywords(cueMotions, [
+        "greet",
+        "greeting",
+        "wave",
+        "hello",
+        "bow",
+      ]);
+      const spoken = await speak(
+        presenter,
+        withMotionMarkup(greeting, greetMotion?.id || null),
+      );
       if (!spoken?.success) {
         setStatus(spoken?.message || "Avatar ready, but greeting failed.");
       }
