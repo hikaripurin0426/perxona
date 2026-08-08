@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Fraunces, Manrope } from "next/font/google";
+import { AuthProvider } from "@/components/AuthProvider";
 import "./globals.css";
 
 const display = Fraunces({
@@ -13,8 +14,12 @@ const body = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "Perxona Speak",
-  description: "English conversation lessons with a Perxona AI avatar",
+  title: "Avilingo",
+  description: "English conversation lessons with an AI avatar",
+  icons: {
+    icon: [{ url: "/favicon.png", type: "image/png" }],
+    apple: [{ url: "/apple-icon.png", type: "image/png" }],
+  },
 };
 
 export default function RootLayout({
@@ -24,7 +29,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${display.variable} ${body.variable}`}>{children}</body>
+      <body className={`${display.variable} ${body.variable}`}>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

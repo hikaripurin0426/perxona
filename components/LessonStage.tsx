@@ -69,7 +69,7 @@ export function LessonStage({
           <div>
             <p className="meeting-title">English Lesson</p>
             <p className="meeting-subtitle">
-              {ready ? "Connected · Perxona Speak" : "Waiting to join"}
+              {ready ? "Connected · Avilingo" : "Waiting to join"}
             </p>
           </div>
         </div>

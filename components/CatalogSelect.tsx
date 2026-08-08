@@ -127,12 +127,14 @@ export function CatalogSelect({
   );
 }
 
-/** Prefer curated list order when choosing the initial avatar id. */
+/** Prefer Tsubasa (cc050) as the default lesson avatar. */
 export function pickCuratedAvatarId(
   avatars: CatalogItem[],
   preferred?: string,
 ): string {
   const resolved = resolveAvatars(avatars).filter((r) => r.catalog);
+  const tsubasa = resolved.find((r) => r.option.code === "cc050");
+  if (tsubasa?.catalog) return tsubasa.catalog.id;
   if (preferred && resolved.some((r) => r.catalog!.id === preferred)) {
     return preferred;
   }

@@ -1,20 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CatalogSelect,
   pickCuratedAvatarId,
 } from "@/components/CatalogSelect";
 import { ChatPanel, type ChatTurn } from "@/components/ChatPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { LoginButton } from "@/components/LoginButton";
 import { getPresenterElement, LessonStage } from "@/components/LessonStage";
+import { useAuth } from "@/hooks/useAuth";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import {
   findFixedSceneId,
   findLessonAvatarOptionByCatalogId,
   resolveVoiceIdForAvatar,
 } from "@/lib/avatars";
+import {
+  recordConversationDay,
+  saveLevelAssessment,
+} from "@/lib/userProfile";
 import type { AppConfig, CatalogItem, PresenterWidget } from "@/lib/types";
+
+const LEVEL_ASSESS_MIN_USER_TURNS = 3;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -58,6 +67,10 @@ function loadPresenterEngine(presenterUrl: string): Promise<void> {
 }
 
 export function LessonApp() {
+  const { user, profile, setProfile, needsNickname, loading: authLoading } =
+    useAuth();
+  const levelAssessStarted = useRef(false);
+  const autoStartedRef = useRef(false);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [avatars, setAvatars] = useState<CatalogItem[]>([]);
   const [voices, setVoices] = useState<CatalogItem[]>([]);
@@ -68,11 +81,17 @@ export function LessonApp() {
   const [starting, setStarting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [speaking, setSpeaking] = useState(false);
-  const [chatOpen, setChatOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const [status, setStatus] = useState("Loading catalog…");
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [stageParticipantName, setStageParticipantName] = useState("Tutor");
+  const [catalogReady, setCatalogReady] = useState(false);
+
+  useEffect(() => {
+    levelAssessStarted.current = false;
+  }, [user?.uid]);
 
   function selectAvatar(
     nextAvatarId: string,
@@ -136,7 +155,8 @@ export function LessonApp() {
         }
         await loadPresenterEngine(cfg.presenterUrl);
         if (cancelled) return;
-        setStatus("Ready to start. Press Start lesson.");
+        setCatalogReady(true);
+        setStatus("Starting lesson…");
       } catch (err) {
         if (cancelled) return;
         setBootError(err instanceof Error ? err.message : String(err));
@@ -211,48 +231,41 @@ export function LessonApp() {
     }
   }
 
-  async function startLesson() {
-    if (!avatarId || !sceneId || !voiceId) {
-      setStatus("Select avatar, scene, and voice first.");
-      return;
-    }
-    const presenter = getPresenterElement();
-    if (!presenter) {
-      setStatus("Presenter is not mounted yet.");
-      return;
-    }
-    setStarting(true);
-    setStatus("Starting lesson…");
-    try {
-      await presenter.resumeAudioPlayback();
-      const { connect_token } = await api<{ connect_token: string }>(
-        "/api/connect-token",
-      );
-      const readyPromise = waitForReady(presenter);
-      await presenter.initialize(connect_token, {
-        avatarId,
-        sceneId,
-        voiceId,
-      });
-      await readyPromise;
-      setReady(true);
-      setStatus("Ready");
-      if (messages.length === 0) {
-        const greeting =
-          "Hi! I'm your English tutor. How are you today?";
-        setMessages([{ role: "assistant", content: greeting }]);
-        const spoken = await speak(presenter, greeting);
-        if (!spoken?.success) {
-          setStatus(spoken?.message || "Avatar ready, but greeting failed.");
-        }
+  const maybeAssessLevel = useCallback(
+    async (transcript: ChatTurn[]) => {
+      if (!user || !profile || profile.level != null) return;
+      const userTurns = transcript.filter((m) => m.role === "user").length;
+      if (userTurns < LEVEL_ASSESS_MIN_USER_TURNS) return;
+      if (levelAssessStarted.current) return;
+      levelAssessStarted.current = true;
+      try {
+        const assessment = await api<{
+          level: number;
+          levelLabel: string;
+          reason: string;
+        }>("/api/assess-level", {
+          method: "POST",
+          body: JSON.stringify({ messages: transcript }),
+        });
+        await saveLevelAssessment(user.uid, {
+          level: assessment.level,
+          levelLabel: assessment.levelLabel,
+        });
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                level: assessment.level,
+                levelLabel: assessment.levelLabel,
+              }
+            : prev,
+        );
+      } catch {
+        levelAssessStarted.current = false;
       }
-    } catch (err) {
-      setReady(false);
-      setStatus(err instanceof Error ? err.message : String(err));
-    } finally {
-      setStarting(false);
-    }
-  }
+    },
+    [user, profile, setProfile],
+  );
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -271,9 +284,29 @@ export function LessonApp() {
       try {
         const { reply } = await api<{ reply: string }>("/api/chat", {
           method: "POST",
-          body: JSON.stringify({ messages: nextMessages }),
+          body: JSON.stringify({
+            messages: nextMessages,
+            learnerName: profile?.username || undefined,
+            tutorName: stageParticipantName || undefined,
+            levelLabel: profile?.levelLabel || undefined,
+          }),
         });
-        setMessages([...nextMessages, { role: "assistant", content: reply }]);
+        const withReply: ChatTurn[] = [
+          ...nextMessages,
+          { role: "assistant", content: reply },
+        ];
+        setMessages(withReply);
+
+        if (user) {
+          try {
+            const updated = await recordConversationDay(user.uid);
+            if (updated) setProfile(updated);
+          } catch {
+            // Progress is best-effort; lesson continues.
+          }
+          void maybeAssessLevel(withReply);
+        }
+
         if (presenter) {
           const result = await speak(presenter, reply);
           if (!result?.success) {
@@ -290,7 +323,16 @@ export function LessonApp() {
         setBusy(false);
       }
     },
-    [config?.chat, messages],
+    [
+      config?.chat,
+      messages,
+      user,
+      profile?.username,
+      profile?.levelLabel,
+      stageParticipantName,
+      setProfile,
+      maybeAssessLevel,
+    ],
   );
 
   const speech = useSpeechRecognition({
@@ -301,6 +343,112 @@ export function LessonApp() {
     },
     onSubmit: sendMessage,
   });
+
+  const startLesson = useCallback(async () => {
+    if (!avatarId || !sceneId || !voiceId) {
+      setStatus("Select avatar, scene, and voice first.");
+      return;
+    }
+    const presenter = getPresenterElement();
+    if (!presenter) {
+      setStatus("Presenter is not mounted yet.");
+      return;
+    }
+    speech.stop(false);
+    void presenter.interruptPresentation?.();
+    setMessages([]);
+    setBusy(false);
+    setSpeaking(false);
+    setStarting(true);
+    setStatus("Starting lesson…");
+    try {
+      await presenter.resumeAudioPlayback();
+      const { connect_token } = await api<{ connect_token: string }>(
+        "/api/connect-token",
+      );
+      const readyPromise = waitForReady(presenter);
+      await presenter.initialize(connect_token, {
+        avatarId,
+        sceneId,
+        voiceId,
+      });
+      await readyPromise;
+      setReady(true);
+      const tutorName =
+        findLessonAvatarOptionByCatalogId(avatars, avatarId)?.label || "Tutor";
+      setStageParticipantName(tutorName);
+      setStatus("Ready");
+      const nick = profile?.username?.trim();
+      const level = profile?.levelLabel?.toUpperCase();
+      const topicAsk =
+        level === "A1" || level === "A2" || !level
+          ? "What did you do this morning?"
+          : level === "B1"
+            ? "Can you tell me about something interesting from your week?"
+            : "What's been on your mind lately, and why?";
+      const greeting = nick
+        ? `Hi, ${nick}! I'm ${tutorName}. Today let's practice English together. ${topicAsk}`
+        : `Hi! I'm ${tutorName}. Today let's practice English together. ${topicAsk}`;
+      setMessages([{ role: "assistant", content: greeting }]);
+      const spoken = await speak(presenter, greeting);
+      if (!spoken?.success) {
+        setStatus(spoken?.message || "Avatar ready, but greeting failed.");
+      }
+    } catch (err) {
+      setReady(false);
+      setStatus(err instanceof Error ? err.message : String(err));
+    } finally {
+      setStarting(false);
+    }
+  }, [
+    avatarId,
+    sceneId,
+    voiceId,
+    avatars,
+    profile?.username,
+    profile?.levelLabel,
+    speech,
+  ]);
+
+  useEffect(() => {
+    if (!catalogReady || autoStartedRef.current) return;
+    if (authLoading || needsNickname) return;
+    if (!avatarId || !sceneId || !voiceId || !config) return;
+    if (ready || starting) return;
+
+    let cancelled = false;
+    let tries = 0;
+    const timer = window.setInterval(() => {
+      if (cancelled || autoStartedRef.current) {
+        window.clearInterval(timer);
+        return;
+      }
+      tries += 1;
+      if (!getPresenterElement()) {
+        if (tries > 60) window.clearInterval(timer);
+        return;
+      }
+      autoStartedRef.current = true;
+      window.clearInterval(timer);
+      void startLesson();
+    }, 50);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    catalogReady,
+    authLoading,
+    needsNickname,
+    avatarId,
+    sceneId,
+    voiceId,
+    config,
+    ready,
+    starting,
+    startLesson,
+  ]);
 
   function requestLeaveLesson() {
     if (!ready && !starting && !speaking && !busy) return;
@@ -317,7 +465,8 @@ export function LessonApp() {
     setBusy(false);
     setSpeaking(false);
     setMessages([]);
-    setChatOpen(true);
+    setChatOpen(false);
+    setStageParticipantName("Tutor");
     setStatus("Lesson ended. Press Start lesson to join again.");
   }
 
@@ -325,7 +474,7 @@ export function LessonApp() {
     return (
       <main className="shell">
         <div className="boot-error">
-          <h1>Perxona Speak</h1>
+          <h1>Avilingo</h1>
           <p>{bootError}</p>
         </div>
       </main>
@@ -337,18 +486,24 @@ export function LessonApp() {
       <div className="backdrop" aria-hidden="true" />
       <header className="topbar">
         <div>
-          <p className="brand">Perxona Speak</p>
-          <p className="tagline">English conversation with an AI avatar</p>
+          <Link href="/" className="brand brand-link">
+            Avilingo
+          </Link>
         </div>
         <div className="topbar-actions">
-          <span className={`pill ${ready ? "pill-on" : ""}`}>
-            {ready ? "Live" : "Idle"}
-          </span>
+          <LoginButton />
           <button
             type="button"
             className="start-btn"
             onClick={() => void startLesson()}
-            disabled={starting || !config || !avatarId || !sceneId || !voiceId}
+            disabled={
+              starting ||
+              needsNickname ||
+              !config ||
+              !avatarId ||
+              !sceneId ||
+              !voiceId
+            }
           >
             {ready ? "Restart lesson" : starting ? "Starting…" : "Start lesson"}
           </button>
@@ -360,10 +515,7 @@ export function LessonApp() {
           ready={ready}
           status={status}
           speaking={speaking}
-          participantName={
-            findLessonAvatarOptionByCatalogId(avatars, avatarId)?.label ||
-            "Tutor"
-          }
+          participantName={stageParticipantName}
           micSupported={speech.supported}
           listening={speech.listening}
           micDisabled={!ready || busy || starting}

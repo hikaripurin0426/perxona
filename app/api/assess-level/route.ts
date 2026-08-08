@@ -1,5 +1,4 @@
-import { createChatReply } from "@/lib/openai";
-import { isValidRomajiNickname, normalizeNickname } from "@/lib/nickname";
+import { assessEnglishLevel } from "@/lib/openai";
 import type { ChatMessage } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -30,33 +29,16 @@ export async function POST(request: Request) {
         content: m.content,
       }));
 
-    if (normalized.length === 0) {
+    const userTurns = normalized.filter((m) => m.role === "user");
+    if (userTurns.length < 3) {
       return Response.json(
-        { error: "No valid chat messages provided." },
+        { error: "Need at least 3 user messages to assess level." },
         { status: 400 },
       );
     }
 
-    const rawName =
-      typeof body?.learnerName === "string" ? body.learnerName : "";
-    const learnerName = normalizeNickname(rawName);
-    const rawTutor =
-      typeof body?.tutorName === "string" ? body.tutorName.trim() : "";
-    const tutorName =
-      rawTutor && /^[A-Za-z][A-Za-z0-9 '.-]{0,39}$/.test(rawTutor)
-        ? rawTutor
-        : null;
-    const rawLevel =
-      typeof body?.levelLabel === "string" ? body.levelLabel.trim() : "";
-    const levelLabel = /^[A-C][12]$/i.test(rawLevel)
-      ? rawLevel.toUpperCase()
-      : null;
-    const reply = await createChatReply(normalized, {
-      learnerName: isValidRomajiNickname(learnerName) ? learnerName : null,
-      tutorName,
-      levelLabel,
-    });
-    return Response.json({ reply });
+    const assessment = await assessEnglishLevel(normalized);
+    return Response.json(assessment);
   } catch (err) {
     const e = err as Error & { status?: number; payload?: unknown };
     const status = e.status ?? 502;
@@ -64,7 +46,7 @@ export async function POST(request: Request) {
       return Response.json(e.payload, { status });
     }
     return Response.json(
-      { error: e.message || "Chat failed" },
+      { error: e.message || "Level assessment failed" },
       { status },
     );
   }

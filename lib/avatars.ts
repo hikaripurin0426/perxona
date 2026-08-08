@@ -22,7 +22,7 @@ export const LESSON_AVATARS: LessonAvatarOption[] = [
   {
     code: "cc066",
     nameKey: "cc066_male_waiter",
-    label: "Waiter",
+    label: "James",
     iconSrc: "/avatar_images/cc066.png",
     voiceNameKey: "Male - fresh and upbeat",
     gender: "male",
@@ -30,7 +30,7 @@ export const LESSON_AVATARS: LessonAvatarOption[] = [
   {
     code: "cc006",
     nameKey: "cc006_male_fainance",
-    label: "Finance",
+    label: "Michael",
     iconSrc: "/avatar_images/cc006.png",
     voiceNameKey: "Male - warm and expressive",
     gender: "male",
@@ -70,7 +70,7 @@ export const LESSON_AVATARS: LessonAvatarOption[] = [
   {
     code: "cc033",
     nameKey: "cc033",
-    label: "cc033",
+    label: "Sarah",
     iconSrc: "/avatar_images/cc033.png",
     voiceNameKey: "Female - child and bright",
     gender: "female",
